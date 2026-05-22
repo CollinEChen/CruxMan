@@ -130,6 +130,7 @@ const JOINT_TO_BODY: Record<string, string> = {
   head: "head", neck: "torso", torso: "torso",
   leftShoulder: "leftUpperArm", leftElbow: "leftLowerArm", leftHand: "leftHand",
   rightShoulder: "rightUpperArm", rightElbow: "rightLowerArm", rightHand: "rightHand",
+  pelvis: "pelvis",
   leftHip: "leftUpperLeg", leftKnee: "leftLowerLeg", leftFoot: "leftFoot",
   rightHip: "rightUpperLeg", rightKnee: "rightLowerLeg", rightFoot: "rightFoot",
 };
@@ -198,6 +199,7 @@ function getStickmanJoints(bodies) {
     rightShoulder: bodies.rightUpperArm.position,
     rightElbow: bodies.rightLowerArm.position,
     rightHand: bodies.rightHand.position,
+    pelvis: bodies.pelvis.position,
     leftHip: bodies.leftUpperLeg.position,
     leftKnee: bodies.leftLowerLeg.position,
     leftFoot: bodies.leftFoot.position,
@@ -239,11 +241,12 @@ function drawStickman(ctx, bodies, hoveredJoint, draggedJoint) {
   ctx.lineTo(joints.rightHand.x, joints.rightHand.y);
   ctx.stroke();
 
-  // Torso
+  // Torso + pelvis Y-shape
   ctx.beginPath();
   ctx.moveTo(joints.neck.x, joints.neck.y);
+  ctx.lineTo(joints.pelvis.x, joints.pelvis.y);
   ctx.lineTo(joints.leftHip.x, joints.leftHip.y);
-  ctx.moveTo(joints.neck.x, joints.neck.y);
+  ctx.moveTo(joints.pelvis.x, joints.pelvis.y);
   ctx.lineTo(joints.rightHip.x, joints.rightHip.y);
   ctx.stroke();
 
@@ -268,13 +271,27 @@ function drawStickman(ctx, bodies, hoveredJoint, draggedJoint) {
     .filter(([k]) => k !== "head")
     .forEach(([joint, pos]) => {
       const isActive = hoveredJoint === joint || draggedJoint === joint;
+      ctx.save();
+      if (joint === "pelvis") {
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 8, 0, 2 * Math.PI);
+        ctx.fillStyle = draggedJoint === "pelvis" ? HOVER_GLOW : STICKMAN_COLOR;
+        ctx.fill();
+        ctx.strokeStyle = "#FFFFFF";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 14, 0, 2 * Math.PI);
+        ctx.strokeStyle = isActive ? HOVER_GLOW : "#D1D5DB";
+        ctx.lineWidth = 2;
+        if (isActive) { ctx.shadowColor = HOVER_GLOW; ctx.shadowBlur = 8; }
+        ctx.stroke();
+        ctx.restore();
+        return;
+      }
       const isLimb = ["leftHand", "rightHand", "leftFoot", "rightFoot"].includes(joint);
       const r = isActive ? (isLimb ? 10 : 6) : (isLimb ? 8 : 5);
-      ctx.save();
-      if (isActive) {
-        ctx.shadowColor = HOVER_GLOW;
-        ctx.shadowBlur = 8;
-      }
+      if (isActive) { ctx.shadowColor = HOVER_GLOW; ctx.shadowBlur = 8; }
       ctx.beginPath();
       ctx.arc(pos.x, pos.y, r, 0, 2 * Math.PI);
       ctx.fillStyle = STICKMAN_COLOR;
@@ -345,6 +362,8 @@ export default function Home() {
     const rightUpperLeg = Bodies.rectangle(cx + px(STICKMAN_PROPORTIONS.head) * 0.3, torso.position.y + px(STICKMAN_PROPORTIONS.torso) / 2 + px(STICKMAN_PROPORTIONS.upperLeg) / 2, px(STICKMAN_PROPORTIONS.head) * 0.3, px(STICKMAN_PROPORTIONS.upperLeg), { density: 0.002 });
     const rightLowerLeg = Bodies.rectangle(rightUpperLeg.position.x, rightUpperLeg.position.y + px(STICKMAN_PROPORTIONS.upperLeg) / 2 + px(STICKMAN_PROPORTIONS.lowerLeg) / 2, px(STICKMAN_PROPORTIONS.head) * 0.25, px(STICKMAN_PROPORTIONS.lowerLeg), { density: 0.002 });
     const rightFoot = Bodies.circle(rightLowerLeg.position.x, rightLowerLeg.position.y + px(STICKMAN_PROPORTIONS.lowerLeg) / 2 + px(STICKMAN_PROPORTIONS.foot) / 2, px(STICKMAN_PROPORTIONS.foot) / 2, { density: 0.002 });
+    // Pelvis — static anchor at bottom of torso
+    const pelvis = Bodies.circle(cx, torso.position.y + px(STICKMAN_PROPORTIONS.torso) / 2, px(STICKMAN_PROPORTIONS.head) * 0.35, { isStatic: true, density: 0.003 });
     // Constraints (joints)
     const constraints = [
       // Head to torso
@@ -358,9 +377,11 @@ export default function Home() {
       // Lower arms to hands
       Constraint.create({ bodyA: leftLowerArm, pointA: { x: -px(STICKMAN_PROPORTIONS.lowerArm) / 2, y: 0 }, bodyB: leftHand, pointB: { x: 0, y: 0 }, stiffness: 0.7 }),
       Constraint.create({ bodyA: rightLowerArm, pointA: { x: px(STICKMAN_PROPORTIONS.lowerArm) / 2, y: 0 }, bodyB: rightHand, pointB: { x: 0, y: 0 }, stiffness: 0.7 }),
-      // Torso to legs
-      Constraint.create({ bodyA: torso, pointA: { x: -px(STICKMAN_PROPORTIONS.head) * 0.18, y: px(STICKMAN_PROPORTIONS.torso) / 2 }, bodyB: leftUpperLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, stiffness: 0.7 }),
-      Constraint.create({ bodyA: torso, pointA: { x: px(STICKMAN_PROPORTIONS.head) * 0.18, y: px(STICKMAN_PROPORTIONS.torso) / 2 }, bodyB: rightUpperLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, stiffness: 0.7 }),
+      // Torso to pelvis
+      Constraint.create({ bodyA: torso, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.torso) / 2 }, bodyB: pelvis, pointB: { x: 0, y: 0 }, length: 0, stiffness: 0.9 }),
+      // Pelvis to legs (replaces torso→legs)
+      Constraint.create({ bodyA: pelvis, pointA: { x: -px(STICKMAN_PROPORTIONS.head) * 0.18, y: 0 }, bodyB: leftUpperLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, stiffness: 0.7 }),
+      Constraint.create({ bodyA: pelvis, pointA: { x: px(STICKMAN_PROPORTIONS.head) * 0.18, y: 0 }, bodyB: rightUpperLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, stiffness: 0.7 }),
       // Upper to lower legs
       Constraint.create({ bodyA: leftUpperLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, bodyB: leftLowerLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, stiffness: 0.7 }),
       Constraint.create({ bodyA: rightUpperLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, bodyB: rightLowerLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, stiffness: 0.7 }),
@@ -369,9 +390,9 @@ export default function Home() {
       Constraint.create({ bodyA: rightLowerLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, bodyB: rightFoot, pointB: { x: 0, y: 0 }, stiffness: 0.7 }),
     ];
     // Add all to world
-    World.add(_engine.world, [floor, head, torso, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot, ...constraints]);
+    World.add(_engine.world, [floor, head, torso, pelvis, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot, ...constraints]);
     // Save for drawing
-    setBodies({ head, torso, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot });
+    setBodies({ head, torso, pelvis, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot });
     setEngine(_engine);
     // Run engine
     const runner = Matter.Runner.create();
@@ -459,8 +480,9 @@ export default function Home() {
       const joints = getStickmanJoints(bodies) as Record<string, {x: number, y: number}>;
       const groups = [
         { keys: ["leftHand", "rightHand", "leftFoot", "rightFoot"], r: 25 },
-        { keys: ["head", "neck", "torso"], r: 15 },
+        { keys: ["pelvis"], r: 20 },
         { keys: ["leftShoulder", "leftElbow", "rightShoulder", "rightElbow", "leftHip", "leftKnee", "rightHip", "rightKnee"], r: 12 },
+        { keys: ["head", "neck", "torso"], r: 15 },
       ];
       for (const { keys, r } of groups) {
         for (const joint of keys) {
@@ -490,7 +512,13 @@ export default function Home() {
       if (dragging && dragJoint && climberPlaced) {
         const bodyKey = JOINT_TO_BODY[dragJoint];
         if (!bodyKey || !bodies || !bodies[bodyKey]) return;
-        Body.setPosition(bodies[bodyKey], { x: x - offset.x, y: y - offset.y });
+        if (dragJoint === "pelvis") {
+          const dx = (x - offset.x) - bodies.pelvis.position.x;
+          const dy = (y - offset.y) - bodies.pelvis.position.y;
+          Object.entries(bodies).forEach(([, b]) => Body.setPosition(b, { x: b.position.x + dx, y: b.position.y + dy }));
+        } else {
+          Body.setPosition(bodies[bodyKey], { x: x - offset.x, y: y - offset.y });
+        }
         if (["leftHand", "rightHand", "leftFoot", "rightFoot"].includes(dragJoint)) {
           const lp = bodies[bodyKey].position;
           let bestIdx = null, bestDist = 40;
@@ -550,7 +578,7 @@ export default function Home() {
         const bodyKey = JOINT_TO_BODY[dragJoint];
         if (bodyKey && bodies[bodyKey]) {
           const limbBody = bodies[bodyKey];
-          Body.setStatic(limbBody, false);
+          Body.setStatic(limbBody, dragJoint === "pelvis");
           if (["leftHand", "rightHand", "leftFoot", "rightFoot"].includes(dragJoint)) {
             let bestIdx = -1, bestDist = 40;
             holds.forEach((hold, idx) => {
