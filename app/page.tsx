@@ -28,6 +28,7 @@ const HOLD_TYPES = [
   { key: "undercling", name: "Undercling", color: "#F97316" },
   { key: "hueco", name: "Hueco", color: "#EC4899" },
   { key: "rail", name: "Rail", color: "#14B8A6" },
+  { key: "smear", name: "Smear", color: "#9CA3AF" },
 ];
 
 function drawHold(ctx, hold, scale = 1) {
@@ -103,6 +104,16 @@ function drawHold(ctx, hold, scale = 1) {
     case "rail": // long thin rectangle
       ctx.fillStyle = "#14B8A6";
       ctx.fillRect(-22 * scale, -4 * scale, 44 * scale, 8 * scale);
+      break;
+    case "smear": // dashed rounded square — friction-only, foot only
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "#9CA3AF";
+      ctx.lineWidth = 1.5 * scale;
+      ctx.setLineDash([3 * scale, 3 * scale]);
+      ctx.beginPath();
+      ctx.roundRect(-10 * scale, -10 * scale, 20 * scale, 20 * scale, 3 * scale);
+      ctx.stroke();
+      ctx.setLineDash([]);
       break;
     default:
       break;
@@ -209,7 +220,7 @@ function getStickmanJoints(bodies) {
   };
 }
 
-function drawStickman(ctx, bodies, hoveredJoint, draggedJoint) {
+function drawStickman(ctx, bodies, hoveredJoint, draggedJoint, pelvisAnchored = false) {
   const joints = getStickmanJoints(bodies);
   const headR = Math.min(20, bodies.head.circleRadius);
 
@@ -282,9 +293,9 @@ function drawStickman(ctx, bodies, hoveredJoint, draggedJoint) {
         ctx.stroke();
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, 14, 0, 2 * Math.PI);
-        ctx.strokeStyle = isActive ? HOVER_GLOW : "#D1D5DB";
+        ctx.strokeStyle = (isActive || pelvisAnchored) ? HOVER_GLOW : "#D1D5DB";
         ctx.lineWidth = 2;
-        if (isActive) { ctx.shadowColor = HOVER_GLOW; ctx.shadowBlur = 8; }
+        if (isActive || pelvisAnchored) { ctx.shadowColor = HOVER_GLOW; ctx.shadowBlur = isActive ? 8 : 4; }
         ctx.stroke();
         ctx.restore();
         return;
@@ -315,13 +326,18 @@ export default function Home() {
   const [hoveredJoint, setHoveredJoint] = useState(null);
   const [draggedJoint, setDraggedJoint] = useState(null);
   const [scale, setScale] = useState(1);
-  const [selectedHold, setSelectedHold] = useState("jug");
+  const [selectedHold, setSelectedHold] = useState("");
   const [holds, setHolds] = useState<Array<{x: number, y: number, type: string, assignedLimb?: string}>>([]);
   const [climberPlaced, setClimberPlaced] = useState(false);
   const [mode, setMode] = useState("select");
   const spawnPosRef = useRef<{x: number, y: number} | null>(null);
   const limbConstraints = useRef<Record<string, Matter.Constraint>>({});
   const snapHoldIndexRef = useRef<number | null>(null);
+  const snapRejectedRef = useRef<{ idx: number; until: number } | null>(null);
+  const draggedJointRef = useRef<string | null>(null);
+  const hoveredHoldIdxRef = useRef<number | null>(null);
+  const draggedHoldIdxRef = useRef<number | null>(null);
+  const lastMouseRef = useRef<{x: number, y: number}>({ x: 0, y: 0 });
 
   // Setup Matter.js and stickman
   useEffect(() => {
@@ -343,8 +359,11 @@ export default function Home() {
     const cy = spawnPosRef.current ? spawnPosRef.current.y : WALL_HEIGHT * 0.15 + px(STICKMAN_PROPORTIONS.head) / 2;
     // Create engine
     const _engine = Engine.create();
-    // Add floor
-    const floor = Bodies.rectangle(WALL_WIDTH / 2, WALL_HEIGHT - 10, WALL_WIDTH, 20, { isStatic: true, render: { fillStyle: "#B0AFA8" } });
+    // Boundary walls (floor + ceiling + left + right)
+    const floor   = Bodies.rectangle(WALL_WIDTH / 2, WALL_HEIGHT + 10, WALL_WIDTH + 40, 20, { isStatic: true });
+    const ceiling = Bodies.rectangle(WALL_WIDTH / 2, -10,              WALL_WIDTH + 40, 20, { isStatic: true });
+    const wallL   = Bodies.rectangle(-10,           WALL_HEIGHT / 2,   20, WALL_HEIGHT + 40, { isStatic: true });
+    const wallR   = Bodies.rectangle(WALL_WIDTH + 10, WALL_HEIGHT / 2, 20, WALL_HEIGHT + 40, { isStatic: true });
     // Bodies
     const head = Bodies.circle(cx, cy, px(STICKMAN_PROPORTIONS.head) / 2, { density: 0.001, friction: 0.2 });
     const torso = Bodies.rectangle(cx, cy + px(STICKMAN_PROPORTIONS.head) / 2 + px(STICKMAN_PROPORTIONS.torso) / 2, px(STICKMAN_PROPORTIONS.head) * 0.7, px(STICKMAN_PROPORTIONS.torso), { density: 0.002, friction: 0.2 });
@@ -362,35 +381,35 @@ export default function Home() {
     const rightUpperLeg = Bodies.rectangle(cx + px(STICKMAN_PROPORTIONS.head) * 0.3, torso.position.y + px(STICKMAN_PROPORTIONS.torso) / 2 + px(STICKMAN_PROPORTIONS.upperLeg) / 2, px(STICKMAN_PROPORTIONS.head) * 0.3, px(STICKMAN_PROPORTIONS.upperLeg), { density: 0.002 });
     const rightLowerLeg = Bodies.rectangle(rightUpperLeg.position.x, rightUpperLeg.position.y + px(STICKMAN_PROPORTIONS.upperLeg) / 2 + px(STICKMAN_PROPORTIONS.lowerLeg) / 2, px(STICKMAN_PROPORTIONS.head) * 0.25, px(STICKMAN_PROPORTIONS.lowerLeg), { density: 0.002 });
     const rightFoot = Bodies.circle(rightLowerLeg.position.x, rightLowerLeg.position.y + px(STICKMAN_PROPORTIONS.lowerLeg) / 2 + px(STICKMAN_PROPORTIONS.foot) / 2, px(STICKMAN_PROPORTIONS.foot) / 2, { density: 0.002 });
-    // Pelvis — static anchor at bottom of torso
-    const pelvis = Bodies.circle(cx, torso.position.y + px(STICKMAN_PROPORTIONS.torso) / 2, px(STICKMAN_PROPORTIONS.head) * 0.35, { isStatic: true, density: 0.003 });
+    // Pelvis — free by default; anchored only when both feet are on holds
+    const pelvis = Bodies.circle(cx, torso.position.y + px(STICKMAN_PROPORTIONS.torso) / 2, px(STICKMAN_PROPORTIONS.head) * 0.35, { density: 0.003 });
     // Constraints (joints)
     const constraints = [
       // Head to torso
-      Constraint.create({ bodyA: head, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.head) / 2 }, bodyB: torso, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.torso) / 2 }, stiffness: 0.7 }),
+      Constraint.create({ bodyA: head, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.head) / 2 }, bodyB: torso, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.torso) / 2 }, stiffness: 0.98 }),
       // Torso to arms
-      Constraint.create({ bodyA: torso, pointA: { x: -px(STICKMAN_PROPORTIONS.head) * 0.35, y: -px(STICKMAN_PROPORTIONS.torso) / 2 }, bodyB: leftUpperArm, pointB: { x: px(STICKMAN_PROPORTIONS.upperArm) / 2, y: 0 }, stiffness: 0.7 }),
-      Constraint.create({ bodyA: torso, pointA: { x: px(STICKMAN_PROPORTIONS.head) * 0.35, y: -px(STICKMAN_PROPORTIONS.torso) / 2 }, bodyB: rightUpperArm, pointB: { x: -px(STICKMAN_PROPORTIONS.upperArm) / 2, y: 0 }, stiffness: 0.7 }),
+      Constraint.create({ bodyA: torso, pointA: { x: -px(STICKMAN_PROPORTIONS.head) * 0.35, y: -px(STICKMAN_PROPORTIONS.torso) / 2 }, bodyB: leftUpperArm, pointB: { x: px(STICKMAN_PROPORTIONS.upperArm) / 2, y: 0 }, stiffness: 0.98 }),
+      Constraint.create({ bodyA: torso, pointA: { x: px(STICKMAN_PROPORTIONS.head) * 0.35, y: -px(STICKMAN_PROPORTIONS.torso) / 2 }, bodyB: rightUpperArm, pointB: { x: -px(STICKMAN_PROPORTIONS.upperArm) / 2, y: 0 }, stiffness: 0.98 }),
       // Upper to lower arms
-      Constraint.create({ bodyA: leftUpperArm, pointA: { x: -px(STICKMAN_PROPORTIONS.upperArm) / 2, y: 0 }, bodyB: leftLowerArm, pointB: { x: px(STICKMAN_PROPORTIONS.lowerArm) / 2, y: 0 }, stiffness: 0.7 }),
-      Constraint.create({ bodyA: rightUpperArm, pointA: { x: px(STICKMAN_PROPORTIONS.upperArm) / 2, y: 0 }, bodyB: rightLowerArm, pointB: { x: -px(STICKMAN_PROPORTIONS.lowerArm) / 2, y: 0 }, stiffness: 0.7 }),
+      Constraint.create({ bodyA: leftUpperArm, pointA: { x: -px(STICKMAN_PROPORTIONS.upperArm) / 2, y: 0 }, bodyB: leftLowerArm, pointB: { x: px(STICKMAN_PROPORTIONS.lowerArm) / 2, y: 0 }, stiffness: 0.98 }),
+      Constraint.create({ bodyA: rightUpperArm, pointA: { x: px(STICKMAN_PROPORTIONS.upperArm) / 2, y: 0 }, bodyB: rightLowerArm, pointB: { x: -px(STICKMAN_PROPORTIONS.lowerArm) / 2, y: 0 }, stiffness: 0.98 }),
       // Lower arms to hands
-      Constraint.create({ bodyA: leftLowerArm, pointA: { x: -px(STICKMAN_PROPORTIONS.lowerArm) / 2, y: 0 }, bodyB: leftHand, pointB: { x: 0, y: 0 }, stiffness: 0.7 }),
-      Constraint.create({ bodyA: rightLowerArm, pointA: { x: px(STICKMAN_PROPORTIONS.lowerArm) / 2, y: 0 }, bodyB: rightHand, pointB: { x: 0, y: 0 }, stiffness: 0.7 }),
+      Constraint.create({ bodyA: leftLowerArm, pointA: { x: -px(STICKMAN_PROPORTIONS.lowerArm) / 2, y: 0 }, bodyB: leftHand, pointB: { x: 0, y: 0 }, stiffness: 0.98 }),
+      Constraint.create({ bodyA: rightLowerArm, pointA: { x: px(STICKMAN_PROPORTIONS.lowerArm) / 2, y: 0 }, bodyB: rightHand, pointB: { x: 0, y: 0 }, stiffness: 0.98 }),
       // Torso to pelvis
       Constraint.create({ bodyA: torso, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.torso) / 2 }, bodyB: pelvis, pointB: { x: 0, y: 0 }, length: 0, stiffness: 0.9 }),
       // Pelvis to legs (replaces torso→legs)
-      Constraint.create({ bodyA: pelvis, pointA: { x: -px(STICKMAN_PROPORTIONS.head) * 0.18, y: 0 }, bodyB: leftUpperLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, stiffness: 0.7 }),
-      Constraint.create({ bodyA: pelvis, pointA: { x: px(STICKMAN_PROPORTIONS.head) * 0.18, y: 0 }, bodyB: rightUpperLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, stiffness: 0.7 }),
+      Constraint.create({ bodyA: pelvis, pointA: { x: -px(STICKMAN_PROPORTIONS.head) * 0.18, y: 0 }, bodyB: leftUpperLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, stiffness: 0.98 }),
+      Constraint.create({ bodyA: pelvis, pointA: { x: px(STICKMAN_PROPORTIONS.head) * 0.18, y: 0 }, bodyB: rightUpperLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, stiffness: 0.98 }),
       // Upper to lower legs
-      Constraint.create({ bodyA: leftUpperLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, bodyB: leftLowerLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, stiffness: 0.7 }),
-      Constraint.create({ bodyA: rightUpperLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, bodyB: rightLowerLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, stiffness: 0.7 }),
+      Constraint.create({ bodyA: leftUpperLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, bodyB: leftLowerLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, stiffness: 0.98 }),
+      Constraint.create({ bodyA: rightUpperLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.upperLeg) / 2 }, bodyB: rightLowerLeg, pointB: { x: 0, y: -px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, stiffness: 0.98 }),
       // Lower legs to feet
-      Constraint.create({ bodyA: leftLowerLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, bodyB: leftFoot, pointB: { x: 0, y: 0 }, stiffness: 0.7 }),
-      Constraint.create({ bodyA: rightLowerLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, bodyB: rightFoot, pointB: { x: 0, y: 0 }, stiffness: 0.7 }),
+      Constraint.create({ bodyA: leftLowerLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, bodyB: leftFoot, pointB: { x: 0, y: 0 }, stiffness: 0.98 }),
+      Constraint.create({ bodyA: rightLowerLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, bodyB: rightFoot, pointB: { x: 0, y: 0 }, stiffness: 0.98 }),
     ];
     // Add all to world
-    World.add(_engine.world, [floor, head, torso, pelvis, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot, ...constraints]);
+    World.add(_engine.world, [floor, ceiling, wallL, wallR, head, torso, pelvis, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot, ...constraints]);
     // Save for drawing
     setBodies({ head, torso, pelvis, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot });
     setEngine(_engine);
@@ -398,6 +417,89 @@ export default function Home() {
     const runner = Matter.Runner.create();
     _engine.runner = runner;
     Matter.Runner.run(runner, _engine);
+    // Standing pose: triggered as soon as any body part nears the floor.
+    // Smoothly lerps from the ragdoll entry pose to a neutral standing pose with 45° arms.
+    const bodyMap: Record<string, Matter.Body> = { head, torso, pelvis, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot };
+    const allStickmanBodies = Object.values(bodyMap);
+    const footR = px(STICKMAN_PROPORTIONS.foot) / 2;
+    const floorSurfaceY = WALL_HEIGHT;
+    let isStanding = false;
+    let standProgress = 0;
+    let entryPos: Record<number, {x: number, y: number}> = {};
+    let targetPos: Record<number, {x: number, y: number}> = {};
+    Matter.Events.on(_engine, 'afterUpdate', () => {
+      const hasConstraints = Object.keys(limbConstraints.current).length > 0;
+      const isDragging = !!draggedJointRef.current;
+      // Trigger as soon as any body part is within 40px of the floor
+      const lowestY = Math.max(...allStickmanBodies.map(b => b.position.y));
+      const shouldStand = lowestY >= floorSurfaceY - 40 && !hasConstraints && !isDragging;
+
+      if (!shouldStand && isStanding) {
+        isStanding = false;
+        standProgress = 0;
+        const draggedBodyId = draggedJointRef.current ? bodyMap[JOINT_TO_BODY[draggedJointRef.current]]?.id : null;
+        allStickmanBodies.forEach(b => {
+          if (b.id !== draggedBodyId) Body.setStatic(b, false);
+        });
+        return;
+      }
+      if (!shouldStand) return;
+
+      if (!isStanding) {
+        // Entering — freeze all, snapshot entry positions, compute targets
+        isStanding = true;
+        standProgress = 0;
+        allStickmanBodies.forEach(b => {
+          Body.setStatic(b, true);
+          entryPos[b.id] = { x: b.position.x, y: b.position.y };
+        });
+
+        const standCx   = (leftFoot.position.x + rightFoot.position.x) / 2;
+        const stanceOff = px(STICKMAN_PROPORTIONS.head) * 0.55;
+        const lFootX    = standCx - stanceOff;
+        const rFootX    = standCx + stanceOff;
+        const footY     = floorSurfaceY - footR;
+        const lLegY     = footY   - px(STICKMAN_PROPORTIONS.lowerLeg) / 2;
+        const uLegY     = lLegY   - px(STICKMAN_PROPORTIONS.lowerLeg) / 2 - px(STICKMAN_PROPORTIONS.upperLeg) / 2;
+        const pelvisY   = uLegY   - px(STICKMAN_PROPORTIONS.upperLeg) / 2;
+        const torsoY    = pelvisY - px(STICKMAN_PROPORTIONS.torso) / 2;
+        const headY     = torsoY  - px(STICKMAN_PROPORTIONS.torso) / 2 - px(STICKMAN_PROPORTIONS.head) / 2;
+        const shoulderY = torsoY  - px(STICKMAN_PROPORTIONS.torso) / 2;
+        // Arms 45° down-and-out from shoulder attachment
+        const d45   = Math.SQRT1_2;
+        const lShoX = standCx - px(STICKMAN_PROPORTIONS.head) * 0.35;
+        const rShoX = standCx + px(STICKMAN_PROPORTIONS.head) * 0.35;
+        const uA    = px(STICKMAN_PROPORTIONS.upperArm);
+        const lA    = px(STICKMAN_PROPORTIONS.lowerArm);
+
+        targetPos = {
+          [head.id]:           { x: standCx,                            y: headY },
+          [torso.id]:          { x: standCx,                            y: torsoY },
+          [pelvis.id]:         { x: standCx,                            y: pelvisY },
+          [leftUpperLeg.id]:   { x: lFootX,                             y: uLegY },
+          [leftLowerLeg.id]:   { x: lFootX,                             y: lLegY },
+          [leftFoot.id]:       { x: lFootX,                             y: footY },
+          [rightUpperLeg.id]:  { x: rFootX,                             y: uLegY },
+          [rightLowerLeg.id]:  { x: rFootX,                             y: lLegY },
+          [rightFoot.id]:      { x: rFootX,                             y: footY },
+          [leftUpperArm.id]:   { x: lShoX - (uA / 2) * d45,            y: shoulderY + (uA / 2) * d45 },
+          [leftLowerArm.id]:   { x: lShoX - uA * d45 - (lA / 2) * d45, y: shoulderY + uA * d45 + (lA / 2) * d45 },
+          [leftHand.id]:       { x: lShoX - (uA + lA) * d45,           y: shoulderY + (uA + lA) * d45 },
+          [rightUpperArm.id]:  { x: rShoX + (uA / 2) * d45,            y: shoulderY + (uA / 2) * d45 },
+          [rightLowerArm.id]:  { x: rShoX + uA * d45 + (lA / 2) * d45, y: shoulderY + uA * d45 + (lA / 2) * d45 },
+          [rightHand.id]:      { x: rShoX + (uA + lA) * d45,           y: shoulderY + (uA + lA) * d45 },
+        };
+      }
+
+      standProgress = Math.min(1, standProgress + 0.09);
+      const t = 1 - Math.pow(1 - standProgress, 3); // ease-out cubic
+      allStickmanBodies.forEach(b => {
+        const from = entryPos[b.id];
+        const to   = targetPos[b.id];
+        if (!from || !to) return;
+        Body.setPosition(b, { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t });
+      });
+    });
     // Clean up on unmount
     return () => {
       Matter.Runner.stop(runner);
@@ -414,13 +516,40 @@ export default function Home() {
       if (!canvas) return;
       const ctx = canvas.getContext("2d")!;
       drawWall(ctx, incline);
-      // Draw floor
+      // Draw floor and ceiling borders
       ctx.save();
       ctx.fillStyle = "#B0AFA8";
       ctx.fillRect(0, WALL_HEIGHT - 20, WALL_WIDTH, 20);
+      ctx.fillRect(0, 0, WALL_WIDTH, 20);
       ctx.restore();
       // Draw holds
       holds.forEach(hold => drawHold(ctx, hold));
+      // Place/move mode: hover and drag indicators
+      const hovHoldIdx = hoveredHoldIdxRef.current;
+      const drgHoldIdx = draggedHoldIdxRef.current;
+      if (drgHoldIdx !== null && holds[drgHoldIdx]) {
+        const h = holds[drgHoldIdx];
+        ctx.save();
+        ctx.strokeStyle = "#FF6B35";
+        ctx.lineWidth = 3;
+        ctx.shadowColor = "#FF6B35";
+        ctx.shadowBlur = 16;
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, 28, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.restore();
+      } else if (hovHoldIdx !== null && holds[hovHoldIdx]) {
+        const h = holds[hovHoldIdx];
+        ctx.save();
+        ctx.strokeStyle = "#FF6B35";
+        ctx.lineWidth = 2;
+        ctx.globalAlpha = 0.6;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.arc(h.x, h.y, 28, 0, 2 * Math.PI);
+        ctx.stroke();
+        ctx.restore();
+      }
       // Snap highlight ring
       const snapIdx = snapHoldIndexRef.current;
       if (snapIdx !== null && holds[snapIdx]) {
@@ -434,6 +563,23 @@ export default function Home() {
         ctx.arc(h.x, h.y, 26, 0, 2 * Math.PI);
         ctx.stroke();
         ctx.restore();
+      }
+      // Rejected snap flash (hand tried to grab smear)
+      if (snapRejectedRef.current) {
+        const { idx, until } = snapRejectedRef.current;
+        if (Date.now() < until && holds[idx]) {
+          ctx.save();
+          ctx.strokeStyle = "#EF4444";
+          ctx.lineWidth = 3;
+          ctx.shadowColor = "#EF4444";
+          ctx.shadowBlur = 12;
+          ctx.beginPath();
+          ctx.arc(holds[idx].x, holds[idx].y, 22, 0, 2 * Math.PI);
+          ctx.stroke();
+          ctx.restore();
+        } else {
+          snapRejectedRef.current = null;
+        }
       }
       // Stuck-limb connection lines
       if (bodies) {
@@ -455,7 +601,7 @@ export default function Home() {
       }
       // Draw stickman if placed
       if (climberPlaced && bodies) {
-        drawStickman(ctx, bodies, hoveredJoint, draggedJoint);
+        drawStickman(ctx, bodies, hoveredJoint, draggedJoint, bodies.pelvis?.isStatic ?? false);
       } else if (!climberPlaced) {
         // Placeholder prompt
         ctx.save();
@@ -473,15 +619,15 @@ export default function Home() {
 
   // Mouse interaction for joints and holds
   useEffect(() => {
-    if (!canvasRef.current || (!bodies && !climberPlaced)) return;
+    if (!canvasRef.current) return;
     const canvas = canvasRef.current;
     function getJointAt(x, y) {
       if (!bodies) return null;
       const joints = getStickmanJoints(bodies) as Record<string, {x: number, y: number}>;
       const groups = [
-        { keys: ["leftHand", "rightHand", "leftFoot", "rightFoot"], r: 25 },
-        { keys: ["pelvis"], r: 20 },
-        { keys: ["leftShoulder", "leftElbow", "rightShoulder", "rightElbow", "leftHip", "leftKnee", "rightHip", "rightKnee"], r: 12 },
+        { keys: ["leftHand", "rightHand", "leftFoot", "rightFoot"], r: 12 },
+        { keys: ["pelvis"], r: 12 },
+        { keys: ["leftShoulder", "leftElbow", "rightShoulder", "rightElbow", "leftHip", "leftKnee", "rightHip", "rightKnee"], r: 10 },
         { keys: ["head", "neck", "torso"], r: 15 },
       ];
       for (const { keys, r } of groups) {
@@ -497,10 +643,14 @@ export default function Home() {
     function getHoldAt(x, y) {
       for (let i = holds.length - 1; i >= 0; i--) {
         const hold = holds[i];
-        // Use a bounding box for hit test
-        if (Math.abs(x - hold.x) < 20 && Math.abs(y - hold.y) < 20) return i;
+        if (Math.hypot(x - hold.x, y - hold.y) < 32) return i;
       }
       return null;
+    }
+    function updatePelvisAnchor() {
+      if (!bodies?.pelvis) return;
+      const shouldAnchor = !!limbConstraints.current["leftFoot"] && !!limbConstraints.current["rightFoot"];
+      Body.setStatic(bodies.pelvis, shouldAnchor);
     }
     let dragging = false;
     let dragJoint: string | null = null;
@@ -509,15 +659,89 @@ export default function Home() {
       const rect = canvas.getBoundingClientRect();
       const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
       const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
+      lastMouseRef.current = { x, y };
+      // Hold drag uses the ref so it survives effect re-runs caused by setHolds
+      if (draggedHoldIdxRef.current !== null) {
+        const idx = draggedHoldIdxRef.current;
+        setHolds(hs => hs.map((h, i) => {
+          if (i !== idx) return h;
+          if (h.assignedLimb && limbConstraints.current[h.assignedLimb]) {
+            (limbConstraints.current[h.assignedLimb] as any).pointB = { x, y };
+          }
+          return { ...h, x, y };
+        }));
+        return;
+      }
+      // Hover detection for place mode
+      if (mode === "place") {
+        const idx = getHoldAt(x, y);
+        hoveredHoldIdxRef.current = idx;
+      } else {
+        hoveredHoldIdxRef.current = null;
+      }
       if (dragging && dragJoint && climberPlaced) {
         const bodyKey = JOINT_TO_BODY[dragJoint];
         if (!bodyKey || !bodies || !bodies[bodyKey]) return;
+        const MARGIN = 20; // match border thickness
+        const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
         if (dragJoint === "pelvis") {
-          const dx = (x - offset.x) - bodies.pelvis.position.x;
-          const dy = (y - offset.y) - bodies.pelvis.position.y;
-          Object.entries(bodies).forEach(([, b]) => Body.setPosition(b, { x: b.position.x + dx, y: b.position.y + dy }));
+          let dx = (x - offset.x) - bodies.pelvis.position.x;
+          let dy = (y - offset.y) - bodies.pelvis.position.y;
+          // Clamp delta so no body leaves the wall
+          Object.values(bodies).forEach(b => {
+            const nx = b.position.x + dx, ny = b.position.y + dy;
+            if (nx < MARGIN)              dx = Math.max(dx, MARGIN - b.position.x);
+            if (nx > WALL_WIDTH - MARGIN) dx = Math.min(dx, WALL_WIDTH - MARGIN - b.position.x);
+            if (ny < MARGIN)              dy = Math.max(dy, MARGIN - b.position.y);
+            if (ny > WALL_HEIGHT - MARGIN) dy = Math.min(dy, WALL_HEIGHT - MARGIN - b.position.y);
+          });
+          // Clamp pelvis delta so constrained limbs can't stretch beyond anatomical reach from their hold
+          const spx2 = (v: number) => v * height * scale;
+          const maxFromPelvis: Record<string, number> = {
+            leftFoot:  spx2(STICKMAN_PROPORTIONS.upperLeg + STICKMAN_PROPORTIONS.lowerLeg + STICKMAN_PROPORTIONS.foot / 2) * 2.2,
+            rightFoot: spx2(STICKMAN_PROPORTIONS.upperLeg + STICKMAN_PROPORTIONS.lowerLeg + STICKMAN_PROPORTIONS.foot / 2) * 2.2,
+            leftHand:  spx2(STICKMAN_PROPORTIONS.torso + STICKMAN_PROPORTIONS.upperArm + STICKMAN_PROPORTIONS.lowerArm + STICKMAN_PROPORTIONS.hand / 2) * 2.2,
+            rightHand: spx2(STICKMAN_PROPORTIONS.torso + STICKMAN_PROPORTIONS.upperArm + STICKMAN_PROPORTIONS.lowerArm + STICKMAN_PROPORTIONS.hand / 2) * 2.2,
+          };
+          Object.entries(limbConstraints.current).forEach(([joint, c]) => {
+            const maxDist = maxFromPelvis[joint];
+            if (!maxDist || !c.pointB) return;
+            const hx = c.pointB.x, hy = c.pointB.y;
+            const npx = bodies.pelvis.position.x + dx;
+            const npy = bodies.pelvis.position.y + dy;
+            const dist = Math.hypot(npx - hx, npy - hy);
+            if (dist > maxDist) {
+              const angle = Math.atan2(npy - hy, npx - hx);
+              dx = hx + Math.cos(angle) * maxDist - bodies.pelvis.position.x;
+              dy = hy + Math.sin(angle) * maxDist - bodies.pelvis.position.y;
+            }
+          });
+          Object.values(bodies).forEach(b => Body.setPosition(b, { x: b.position.x + dx, y: b.position.y + dy }));
         } else {
-          Body.setPosition(bodies[bodyKey], { x: x - offset.x, y: y - offset.y });
+          let tx = clamp(x - offset.x, MARGIN, WALL_WIDTH - MARGIN);
+          let ty = clamp(y - offset.y, MARGIN, WALL_HEIGHT - MARGIN);
+          // Clamp limb endpoints to their max anatomical reach from the anchor joint
+          const spx = (v: number) => v * height * scale;
+          const maxArm  = spx(STICKMAN_PROPORTIONS.upperArm + STICKMAN_PROPORTIONS.lowerArm + STICKMAN_PROPORTIONS.hand) * 0.95;
+          const maxLeg  = spx(STICKMAN_PROPORTIONS.upperLeg + STICKMAN_PROPORTIONS.lowerLeg + STICKMAN_PROPORTIONS.foot) * 0.95;
+          const reachMap: Record<string, { anchor: string; max: number }> = {
+            leftHand:  { anchor: "leftUpperArm",  max: maxArm },
+            rightHand: { anchor: "rightUpperArm", max: maxArm },
+            leftFoot:  { anchor: "leftUpperLeg",  max: maxLeg },
+            rightFoot: { anchor: "rightUpperLeg", max: maxLeg },
+          };
+          const reach = reachMap[dragJoint];
+          if (reach && bodies[reach.anchor]) {
+            const ax = bodies[reach.anchor].position.x;
+            const ay = bodies[reach.anchor].position.y;
+            const ddx = tx - ax, ddy = ty - ay;
+            const dist = Math.hypot(ddx, ddy);
+            if (dist > reach.max) {
+              tx = ax + (ddx / dist) * reach.max;
+              ty = ay + (ddy / dist) * reach.max;
+            }
+          }
+          Body.setPosition(bodies[bodyKey], { x: tx, y: ty });
         }
         if (["leftHand", "rightHand", "leftFoot", "rightFoot"].includes(dragJoint)) {
           const lp = bodies[bodyKey].position;
@@ -545,11 +769,19 @@ export default function Home() {
           return;
         }
       }
-      // Place hold only in place mode
-      if (mode === "place" && selectedHold && e.button === 0) {
-        const gx = Math.round((x - HOLE_SPACING / 2) / HOLE_SPACING) * HOLE_SPACING + HOLE_SPACING / 2;
-        const gy = Math.round((y - HOLE_SPACING / 2) / HOLE_SPACING) * HOLE_SPACING + HOLE_SPACING / 2;
-        setHolds(hs => [...hs, { x: gx, y: gy, type: selectedHold }]);
+      // Place/move holds in place mode
+      if (mode === "place" && e.button === 0) {
+        const existingIdx = getHoldAt(x, y);
+        if (existingIdx !== null) {
+          draggedHoldIdxRef.current = existingIdx;
+          hoveredHoldIdxRef.current = null;
+          return;
+        }
+        if (selectedHold) {
+          const gx = Math.round((x - HOLE_SPACING / 2) / HOLE_SPACING) * HOLE_SPACING + HOLE_SPACING / 2;
+          const gy = Math.round((y - HOLE_SPACING / 2) / HOLE_SPACING) * HOLE_SPACING + HOLE_SPACING / 2;
+          setHolds(hs => [...hs, { x: gx, y: gy, type: selectedHold }]);
+        }
         return;
       }
       // Drag joint
@@ -563,10 +795,12 @@ export default function Home() {
             World.remove(engine.world, limbConstraints.current[joint]);
             delete limbConstraints.current[joint];
             setHolds(hs => hs.map(h => h.assignedLimb === joint ? { ...h, assignedLimb: undefined } : h));
+            updatePelvisAnchor();
           }
           dragging = true;
           dragJoint = joint;
           setDraggedJoint(joint);
+          draggedJointRef.current = joint;
           Body.setStatic(bodies[bodyKey], true);
           const pos = bodies[bodyKey].position;
           offset = { x: x - pos.x, y: y - pos.y };
@@ -578,28 +812,54 @@ export default function Home() {
         const bodyKey = JOINT_TO_BODY[dragJoint];
         if (bodyKey && bodies[bodyKey]) {
           const limbBody = bodies[bodyKey];
-          Body.setStatic(limbBody, dragJoint === "pelvis");
-          if (["leftHand", "rightHand", "leftFoot", "rightFoot"].includes(dragJoint)) {
-            let bestIdx = -1, bestDist = 40;
-            holds.forEach((hold, idx) => {
-              const d = Math.hypot(limbBody.position.x - hold.x, limbBody.position.y - hold.y);
-              if (d < bestDist) { bestDist = d; bestIdx = idx; }
-            });
-            if (bestIdx >= 0) {
-              const hold = holds[bestIdx];
-              Body.setPosition(limbBody, { x: hold.x, y: hold.y });
-              const c = Constraint.create({ bodyA: limbBody, pointB: { x: hold.x, y: hold.y }, length: 0, stiffness: 1.0, damping: 0.1 });
-              World.add(engine.world, c);
-              limbConstraints.current[dragJoint] = c;
-              setHolds(hs => hs.map((h, i) => i === bestIdx ? { ...h, assignedLimb: dragJoint! } : h));
+          if (dragJoint === "pelvis") {
+            updatePelvisAnchor();
+          } else {
+            Body.setStatic(limbBody, false);
+            if (["leftHand", "rightHand", "leftFoot", "rightFoot"].includes(dragJoint)) {
+              let bestIdx = -1, bestDist = 40;
+              holds.forEach((hold, idx) => {
+                const d = Math.hypot(limbBody.position.x - hold.x, limbBody.position.y - hold.y);
+                if (d < bestDist) { bestDist = d; bestIdx = idx; }
+              });
+              if (bestIdx >= 0) {
+                const hold = holds[bestIdx];
+                const isHand = dragJoint === "leftHand" || dragJoint === "rightHand";
+                if (hold.type === "smear" && isHand) {
+                  snapRejectedRef.current = { idx: bestIdx, until: Date.now() + 400 };
+                } else {
+                  Body.setPosition(limbBody, { x: hold.x, y: hold.y });
+                  const c = Constraint.create({ bodyA: limbBody, pointB: { x: hold.x, y: hold.y }, length: 0, stiffness: 1.0, damping: 0.1 });
+                  World.add(engine.world, c);
+                  limbConstraints.current[dragJoint] = c;
+                  setHolds(hs => hs.map((h, i) => i === bestIdx ? { ...h, assignedLimb: dragJoint! } : h));
+                  updatePelvisAnchor();
+                }
+              }
             }
           }
         }
       }
       snapHoldIndexRef.current = null;
+      if (draggedHoldIdxRef.current !== null) {
+        const mx = lastMouseRef.current.x, my = lastMouseRef.current.y;
+        const gx = Math.round((mx - HOLE_SPACING / 2) / HOLE_SPACING) * HOLE_SPACING + HOLE_SPACING / 2;
+        const gy = Math.round((my - HOLE_SPACING / 2) / HOLE_SPACING) * HOLE_SPACING + HOLE_SPACING / 2;
+        const idx = draggedHoldIdxRef.current;
+        setHolds(hs => hs.map((h, i) => {
+          if (i !== idx) return h;
+          if (h.assignedLimb && limbConstraints.current[h.assignedLimb]) {
+            (limbConstraints.current[h.assignedLimb] as any).pointB = { x: gx, y: gy };
+          }
+          return { ...h, x: gx, y: gy };
+        }));
+      }
+      draggedHoldIdxRef.current = null;
+      hoveredHoldIdxRef.current = null;
       dragging = false;
       dragJoint = null;
       setDraggedJoint(null);
+      draggedJointRef.current = null;
     }
     function onContextMenu(e) {
       e.preventDefault();
@@ -645,13 +905,13 @@ export default function Home() {
             <button
               type="button"
               className={"flex-1 py-1.5 text-xs font-semibold rounded transition " + (mode === "select" ? "bg-[#FF6B35] text-white" : "bg-white text-[#171717] border border-gray-300 hover:border-[#FF6B35]")}
-              onClick={() => setMode("select")}
+              onClick={() => { setMode("select"); setSelectedHold(""); }}
             >Select</button>
             <button
               type="button"
               className={"flex-1 py-1.5 text-xs font-semibold rounded transition " + (mode === "place" ? "bg-[#FF6B35] text-white" : "bg-white text-[#171717] border border-gray-300 hover:border-[#FF6B35]")}
               onClick={() => setMode("place")}
-            >Place Hold</button>
+            >Place/Move Holds</button>
           </div>
         </div>
         <div className="mb-6">
@@ -709,7 +969,7 @@ export default function Home() {
                     : "bg-white text-[#171717] border border-gray-300 hover:border-[#FF6B35]") +
                   " flex items-center gap-2 px-2 py-1 rounded text-xs font-semibold transition"
                 }
-                onClick={() => setSelectedHold(ht.key)}
+                onClick={() => { setSelectedHold(ht.key); setMode("place"); }}
                 type="button"
               >
                 <span style={{ display: "inline-block", width: 18, height: 18 }}>
@@ -737,6 +997,8 @@ export default function Home() {
                           return <circle cx={9} cy={9} r={8} fill="none" stroke={ht.color} strokeWidth={3} />;
                         case "rail":
                           return <rect x={2} y={7} width={14} height={4} rx={2} fill={ht.color} />;
+                        case "smear":
+                          return <rect x={4} y={4} width={10} height={10} rx={2} fill="none" stroke={ht.color} strokeWidth={1.5} strokeDasharray="2 2" />;
                         default:
                           return null;
                       }
