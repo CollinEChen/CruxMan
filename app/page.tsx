@@ -122,13 +122,9 @@ const STICKMAN_PROPORTIONS = {
   foot: 0.08,
 };
 
-const STICKMAN_COLOR = "#2D2D2D";
-const JOINT_COLOR = "#FFF";
-const JOINT_BORDER = "#2D2D2D";
-const JOINT_RADIUS = 8;
-const JOINT_RADIUS_ACTIVE = 12;
-const HAND_FOOT_RADIUS = 11;
-const HAND_FOOT_RADIUS_ACTIVE = 15;
+const STICKMAN_COLOR = "#1A1A1A";
+const JOINT_RADIUS = 8; // used for mouse hit detection only
+const HAND_FOOT_RADIUS = 11; // used for mouse hit detection only
 const HOVER_GLOW = "#FF6B35";
 
 function drawWall(ctx, incline) {
@@ -204,14 +200,28 @@ function getStickmanJoints(bodies) {
   };
 }
 
-function drawStickman(ctx, bodies, hoveredJoint, draggedJoint, scale) {
+function drawStickman(ctx, bodies, hoveredJoint, draggedJoint) {
   const joints = getStickmanJoints(bodies);
+  const headR = Math.min(20, bodies.head.circleRadius);
+
   ctx.save();
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
-  // Draw limbs (lines between joints)
   ctx.strokeStyle = STICKMAN_COLOR;
-  ctx.lineWidth = 8 * scale;
+  ctx.lineWidth = 2.5;
+
+  // Neck: head center down to shoulder level
+  ctx.beginPath();
+  ctx.moveTo(joints.head.x, joints.head.y);
+  ctx.lineTo(joints.neck.x, joints.neck.y);
+  ctx.stroke();
+
+  // Shoulder crossbar
+  ctx.beginPath();
+  ctx.moveTo(joints.leftShoulder.x, joints.leftShoulder.y);
+  ctx.lineTo(joints.rightShoulder.x, joints.rightShoulder.y);
+  ctx.stroke();
+
   // Arms
   ctx.beginPath();
   ctx.moveTo(joints.leftShoulder.x, joints.leftShoulder.y);
@@ -221,6 +231,15 @@ function drawStickman(ctx, bodies, hoveredJoint, draggedJoint, scale) {
   ctx.lineTo(joints.rightElbow.x, joints.rightElbow.y);
   ctx.lineTo(joints.rightHand.x, joints.rightHand.y);
   ctx.stroke();
+
+  // Torso
+  ctx.beginPath();
+  ctx.moveTo(joints.neck.x, joints.neck.y);
+  ctx.lineTo(joints.leftHip.x, joints.leftHip.y);
+  ctx.moveTo(joints.neck.x, joints.neck.y);
+  ctx.lineTo(joints.rightHip.x, joints.rightHip.y);
+  ctx.stroke();
+
   // Legs
   ctx.beginPath();
   ctx.moveTo(joints.leftHip.x, joints.leftHip.y);
@@ -230,52 +249,34 @@ function drawStickman(ctx, bodies, hoveredJoint, draggedJoint, scale) {
   ctx.lineTo(joints.rightKnee.x, joints.rightKnee.y);
   ctx.lineTo(joints.rightFoot.x, joints.rightFoot.y);
   ctx.stroke();
-  // Torso
+
+  // Head — filled black circle, capped at 20px radius
   ctx.beginPath();
-  ctx.moveTo(joints.neck.x, joints.neck.y);
-  ctx.lineTo(joints.leftHip.x, joints.leftHip.y);
-  ctx.moveTo(joints.neck.x, joints.neck.y);
-  ctx.lineTo(joints.rightHip.x, joints.rightHip.y);
-  ctx.stroke();
-  // Head
-  ctx.beginPath();
-  ctx.arc(joints.head.x, joints.head.y, (STICKMAN_PROPORTIONS.head * scale * 0.5), 0, 2 * Math.PI);
+  ctx.arc(joints.head.x, joints.head.y, headR, 0, 2 * Math.PI);
   ctx.fillStyle = STICKMAN_COLOR;
   ctx.fill();
-  // Joints
-  Object.entries(joints).forEach(([joint, pos]) => {
-    let r = JOINT_RADIUS * scale;
-    if (["leftHand", "rightHand", "leftFoot", "rightFoot"].includes(joint)) r = HAND_FOOT_RADIUS * scale;
-    if (hoveredJoint === joint) r = HAND_FOOT_RADIUS_ACTIVE * scale;
-    if (draggedJoint === joint) {
+
+  // Joints — small black dots with 1px white border, skip head
+  Object.entries(joints)
+    .filter(([k]) => k !== "head")
+    .forEach(([joint, pos]) => {
+      const isActive = hoveredJoint === joint || draggedJoint === joint;
+      const r = isActive ? 6 : 5;
       ctx.save();
-      ctx.shadowColor = HOVER_GLOW;
-      ctx.shadowBlur = 16 * scale;
-      ctx.fillStyle = HOVER_GLOW;
+      if (isActive) {
+        ctx.shadowColor = HOVER_GLOW;
+        ctx.shadowBlur = 8;
+      }
       ctx.beginPath();
       ctx.arc(pos.x, pos.y, r, 0, 2 * Math.PI);
+      ctx.fillStyle = STICKMAN_COLOR;
       ctx.fill();
-      ctx.restore();
-    }
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, r, 0, 2 * Math.PI);
-    ctx.fillStyle = JOINT_COLOR;
-    ctx.strokeStyle = JOINT_BORDER;
-    ctx.lineWidth = 3 * scale;
-    ctx.fill();
-    ctx.stroke();
-    if (hoveredJoint === joint && draggedJoint !== joint) {
-      ctx.save();
-      ctx.shadowColor = HOVER_GLOW;
-      ctx.shadowBlur = 12 * scale;
-      ctx.beginPath();
-      ctx.arc(pos.x, pos.y, r, 0, 2 * Math.PI);
-      ctx.strokeStyle = HOVER_GLOW;
-      ctx.lineWidth = 4 * scale;
+      ctx.strokeStyle = "#FFFFFF";
+      ctx.lineWidth = 1;
       ctx.stroke();
       ctx.restore();
-    }
-  });
+    });
+
   ctx.restore();
 }
 
@@ -291,18 +292,19 @@ export default function Home() {
   const [scale, setScale] = useState(1);
   const [selectedHold, setSelectedHold] = useState("jug");
   const [holds, setHolds] = useState([]);
+  const [climberPlaced, setClimberPlaced] = useState(false);
 
   // Setup Matter.js and stickman
   useEffect(() => {
-    if (!canvasRef.current) return;
+    if (!canvasRef.current || !climberPlaced) return;
     // Clean up previous engine
     if (engine) {
       Matter.Runner.stop(engine.runner);
       Matter.World.clear(engine.world, false);
       Matter.Engine.clear(engine);
     }
-    // Calculate scale for stickman
-    const stickmanHeightPx = WALL_HEIGHT * 0.7;
+    // Map height slider (48–84in) to 150–220px canvas height (~180px at average)
+    const stickmanHeightPx = Math.round(150 + ((height - 48) / 36) * 70);
     const scalePx = stickmanHeightPx / height;
     setScale(scalePx);
     // Stickman proportions in px
@@ -312,6 +314,8 @@ export default function Home() {
     const cy = WALL_HEIGHT * 0.15 + px(STICKMAN_PROPORTIONS.head) / 2;
     // Create engine
     const _engine = Engine.create();
+    // Add floor
+    const floor = Bodies.rectangle(WALL_WIDTH / 2, WALL_HEIGHT - 10, WALL_WIDTH, 20, { isStatic: true, render: { fillStyle: "#B0AFA8" } });
     // Bodies
     const head = Bodies.circle(cx, cy, px(STICKMAN_PROPORTIONS.head) / 2, { density: 0.001, friction: 0.2 });
     const torso = Bodies.rectangle(cx, cy + px(STICKMAN_PROPORTIONS.head) / 2 + px(STICKMAN_PROPORTIONS.torso) / 2, px(STICKMAN_PROPORTIONS.head) * 0.7, px(STICKMAN_PROPORTIONS.torso), { density: 0.002, friction: 0.2 });
@@ -353,7 +357,7 @@ export default function Home() {
       Constraint.create({ bodyA: rightLowerLeg, pointA: { x: 0, y: px(STICKMAN_PROPORTIONS.lowerLeg) / 2 }, bodyB: rightFoot, pointB: { x: 0, y: 0 }, stiffness: 0.7 }),
     ];
     // Add all to world
-    World.add(_engine.world, [head, torso, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot, ...constraints]);
+    World.add(_engine.world, [floor, head, torso, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot, ...constraints]);
     // Save for drawing
     setBodies({ head, torso, leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand, leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot });
     setEngine(_engine);
@@ -367,30 +371,47 @@ export default function Home() {
       Matter.World.clear(_engine.world, false);
       Matter.Engine.clear(_engine);
     };
-  }, [height, weight]);
+  }, [height, weight, climberPlaced]);
 
   // Redraw wall, holds, and stickman every frame
   useEffect(() => {
     let animationId;
     function render() {
       const canvas = canvasRef.current;
-      if (!canvas || !bodies) return;
+      if (!canvas) return;
       const ctx = canvas.getContext("2d");
       drawWall(ctx, incline);
+      // Draw floor
+      ctx.save();
+      ctx.fillStyle = "#B0AFA8";
+      ctx.fillRect(0, WALL_HEIGHT - 20, WALL_WIDTH, 20);
+      ctx.restore();
       // Draw holds
       holds.forEach(hold => drawHold(ctx, hold));
-      drawStickman(ctx, bodies, hoveredJoint, draggedJoint, scale);
+      // Draw stickman if placed
+      if (climberPlaced && bodies) {
+        drawStickman(ctx, bodies, hoveredJoint, draggedJoint);
+      } else if (!climberPlaced) {
+        // Placeholder prompt
+        ctx.save();
+        ctx.font = "600 1.2rem Inter, Arial, sans-serif";
+        ctx.fillStyle = "#B0AFA8";
+        ctx.textAlign = "center";
+        ctx.fillText("Click 'Place Climber' to add the stickman", WALL_WIDTH / 2, WALL_HEIGHT / 2);
+        ctx.restore();
+      }
       animationId = requestAnimationFrame(render);
     }
     render();
     return () => cancelAnimationFrame(animationId);
-  }, [bodies, incline, hoveredJoint, draggedJoint, scale, holds]);
+  }, [bodies, incline, hoveredJoint, draggedJoint, scale, holds, climberPlaced]);
 
   // Mouse interaction for joints and holds
   useEffect(() => {
-    if (!canvasRef.current || !bodies) return;
+    if (!canvasRef.current || (!bodies && !climberPlaced)) return;
     const canvas = canvasRef.current;
     function getJointAt(x, y) {
+      if (!bodies) return null;
       const joints = getStickmanJoints(bodies);
       for (const [joint, pos] of Object.entries(joints)) {
         let r = JOINT_RADIUS * scale;
@@ -416,11 +437,11 @@ export default function Home() {
       const rect = canvas.getBoundingClientRect();
       const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
       const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
-      if (dragging && dragJoint) {
+      if (dragging && dragJoint && climberPlaced) {
         // Move joint body
         const body = bodies[dragJoint];
         Body.setPosition(body, { x: x - offset.x, y: y - offset.y });
-      } else {
+      } else if (climberPlaced) {
         setHoveredJoint(getJointAt(x, y));
       }
     }
@@ -437,7 +458,7 @@ export default function Home() {
         }
       }
       // Place hold if a hold type is selected and not clicking a joint
-      if (selectedHold && !getJointAt(x, y) && e.button === 0) {
+      if (selectedHold && (!climberPlaced || !getJointAt(x, y)) && e.button === 0) {
         // Snap to nearest grid dot
         const gx = Math.round((x - HOLE_SPACING / 2) / HOLE_SPACING) * HOLE_SPACING + HOLE_SPACING / 2;
         const gy = Math.round((y - HOLE_SPACING / 2) / HOLE_SPACING) * HOLE_SPACING + HOLE_SPACING / 2;
@@ -445,13 +466,15 @@ export default function Home() {
         return;
       }
       // Drag joint
-      const joint = getJointAt(x, y);
-      if (joint) {
-        dragging = true;
-        dragJoint = joint;
-        setDraggedJoint(joint);
-        const pos = bodies[joint].position;
-        offset = { x: x - pos.x, y: y - pos.y };
+      if (climberPlaced) {
+        const joint = getJointAt(x, y);
+        if (joint) {
+          dragging = true;
+          dragJoint = joint;
+          setDraggedJoint(joint);
+          const pos = bodies[joint].position;
+          offset = { x: x - pos.x, y: y - pos.y };
+        }
       }
     }
     function onMouseUp() {
@@ -480,7 +503,7 @@ export default function Home() {
       canvas.removeEventListener("touchend", onMouseUp);
       canvas.removeEventListener("contextmenu", onContextMenu);
     };
-  }, [bodies, scale, selectedHold, holds]);
+  }, [bodies, scale, selectedHold, holds, climberPlaced]);
 
   function formatHeight(inches) {
     const ft = Math.floor(inches / 12);
@@ -493,7 +516,7 @@ export default function Home() {
       {/* Left Sidebar */}
       <aside className="w-[280px] h-full bg-white border-r border-[#E5E7EB] flex flex-col px-6 py-8">
         <div className="mb-8">
-          <h1 className="font-bold text-2xl tracking-tight text-[#171717]">BetaForge</h1>
+          <h1 className="font-bold text-2xl tracking-tight text-[#171717]">CruxMan</h1>
           <div className="text-xs text-gray-500 font-medium mt-1">Climbing Force Analyzer</div>
         </div>
         <div className="mb-6">
@@ -591,6 +614,13 @@ export default function Home() {
           </div>
         </div>
         <div className="flex-1" />
+        <button
+          className="w-full py-2 mt-2 bg-[#FF6B35] text-white font-bold rounded shadow hover:bg-[#ff874f] transition"
+          onClick={() => setClimberPlaced(true)}
+          disabled={climberPlaced}
+        >
+          Place Climber
+        </button>
       </aside>
 
       {/* Main Wall Area */}
