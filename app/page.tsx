@@ -1148,6 +1148,18 @@ export default function Home() {
                   const data = await response.json();
                   if (response.ok) {
                     setAnalysisResult(data);
+                    // Fire-and-forget log to Snowflake in the background (don't await)
+                    fetch("/api/log", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        wallIncline: incline,
+                        climberHeight: height,
+                        climberWeight: weight,
+                        selectedHoldId: selectedAnalysisHoldId,
+                        analysis: data,
+                      }),
+                    }).catch(() => {});
                   } else {
                     alert(`Error: ${data.error}`);
                     setAnalysisResult(null);

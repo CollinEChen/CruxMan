@@ -15,6 +15,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "CruxMan",
   description: "Climbing force analyzer and route planner",
+  icons: {
+    icon: "/CruxMan-favicon.png",
+  },
 };
 
 export default function RootLayout({
