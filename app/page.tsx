@@ -31,7 +31,7 @@ const HOLD_TYPES = [
   { key: "smear", name: "Smear", color: "#9CA3AF" },
 ];
 
-function drawHold(ctx, hold, scale = 1) {
+function drawHold(ctx: CanvasRenderingContext2D, hold: { x: number; y: number; type: string; id: string; assignedLimb?: string; grip?: string }, scale = 1) {
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.18)";
   ctx.shadowBlur = 8 * scale;
@@ -146,7 +146,7 @@ const JOINT_TO_BODY: Record<string, string> = {
   rightHip: "rightUpperLeg", rightKnee: "rightLowerLeg", rightFoot: "rightFoot",
 };
 
-function drawWall(ctx, incline) {
+function drawWall(ctx: CanvasRenderingContext2D, incline: number) {
   // Clear
   ctx.clearRect(0, 0, WALL_WIDTH, WALL_HEIGHT);
   // Wall background
@@ -199,7 +199,7 @@ function drawWall(ctx, incline) {
 }
 
 // Utility to get stickman body part positions from Matter.js bodies
-function getStickmanJoints(bodies) {
+function getStickmanJoints(bodies: Record<string, Matter.Body>) {
   return {
     head: bodies.head.position,
     neck: bodies.torso.position,
@@ -220,9 +220,9 @@ function getStickmanJoints(bodies) {
   };
 }
 
-function drawStickman(ctx, bodies, hoveredJoint, draggedJoint, pelvisAnchored = false) {
+function drawStickman(ctx: CanvasRenderingContext2D, bodies: Record<string, Matter.Body>, hoveredJoint: string | null, draggedJoint: string | null, pelvisAnchored = false) {
   const joints = getStickmanJoints(bodies);
-  const headR = Math.min(20, bodies.head.circleRadius);
+  const headR = Math.min(20, bodies.head.circleRadius ?? 20);
 
   ctx.save();
   ctx.lineCap = "round";
@@ -323,13 +323,17 @@ export default function Home() {
   const [weight, setWeight] = useState(150); // lbs
   const [engine, setEngine] = useState<Matter.Engine | null>(null);
   const [bodies, setBodies] = useState<Record<string, Matter.Body> | null>(null);
-  const [hoveredJoint, setHoveredJoint] = useState(null);
-  const [draggedJoint, setDraggedJoint] = useState(null);
+  const [hoveredJoint, setHoveredJoint] = useState<string | null>(null);
+  const [draggedJoint, setDraggedJoint] = useState<string | null>(null);
   const [scale, setScale] = useState(1);
   const [selectedHold, setSelectedHold] = useState("");
-  const [holds, setHolds] = useState<Array<{x: number, y: number, type: string, assignedLimb?: string}>>([]);
+  const [holds, setHolds] = useState<Array<{x: number, y: number, type: string, id: string, assignedLimb?: string, grip?: string}>>([]);
   const [climberPlaced, setClimberPlaced] = useState(false);
   const [mode, setMode] = useState("select");
+  const [isHoldForceSelectorMode, setIsHoldForceSelectorMode] = useState(false);
+  const [selectedAnalysisHoldId, setSelectedAnalysisHoldId] = useState<string | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<any>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const spawnPosRef = useRef<{x: number, y: number} | null>(null);
   const limbConstraints = useRef<Record<string, Matter.Constraint>>({});
   const snapHoldIndexRef = useRef<number | null>(null);
@@ -344,7 +348,7 @@ export default function Home() {
     if (!canvasRef.current || !climberPlaced) return;
     // Clean up previous engine
     if (engine) {
-      Matter.Runner.stop((engine as any).runner);
+      Matter.Runner.stop((engine as any).runner as Matter.Runner);
       Matter.World.clear(engine.world, false);
       Matter.Engine.clear(engine);
     }
@@ -353,7 +357,7 @@ export default function Home() {
     const scalePx = stickmanHeightPx / height;
     setScale(scalePx);
     // Stickman proportions in px
-    const px = v => v * height * scalePx;
+    const px = (v: number) => v * height * scalePx;
     // Center stickman
     const cx = spawnPosRef.current ? spawnPosRef.current.x : WALL_WIDTH / 2;
     const cy = spawnPosRef.current ? spawnPosRef.current.y : WALL_HEIGHT * 0.15 + px(STICKMAN_PROPORTIONS.head) / 2;
@@ -415,7 +419,7 @@ export default function Home() {
     setEngine(_engine);
     // Run engine
     const runner = Matter.Runner.create();
-    _engine.runner = runner;
+    (_engine as any).runner = runner;
     Matter.Runner.run(runner, _engine);
     // Standing pose: triggered as soon as any body part nears the floor.
     // Smoothly lerps from the ragdoll entry pose to a neutral standing pose with 45° arms.
@@ -510,7 +514,7 @@ export default function Home() {
 
   // Redraw wall, holds, and stickman every frame
   useEffect(() => {
-    let animationId;
+    let animationId: number;
     function render() {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -524,6 +528,21 @@ export default function Home() {
       ctx.restore();
       // Draw holds
       holds.forEach(hold => drawHold(ctx, hold));
+      // Draw selected analysis hold halo
+      if (selectedAnalysisHoldId && isHoldForceSelectorMode) {
+        const selectedHold = holds.find(h => h.id === selectedAnalysisHoldId);
+        if (selectedHold) {
+          ctx.save();
+          ctx.strokeStyle = "#FF6B35";
+          ctx.lineWidth = 4;
+          ctx.shadowColor = "#FF6B35";
+          ctx.shadowBlur = 20;
+          ctx.beginPath();
+          ctx.arc(selectedHold.x, selectedHold.y, 40, 0, 2 * Math.PI);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
       // Place/move mode: hover and drag indicators
       const hovHoldIdx = hoveredHoldIdxRef.current;
       const drgHoldIdx = draggedHoldIdxRef.current;
@@ -615,13 +634,13 @@ export default function Home() {
     }
     render();
     return () => cancelAnimationFrame(animationId);
-  }, [bodies, incline, hoveredJoint, draggedJoint, scale, holds, climberPlaced]);
+  }, [bodies, incline, hoveredJoint, draggedJoint, scale, holds, climberPlaced, selectedAnalysisHoldId, isHoldForceSelectorMode]);
 
   // Mouse interaction for joints and holds
   useEffect(() => {
     if (!canvasRef.current) return;
     const canvas = canvasRef.current;
-    function getJointAt(x, y) {
+    function getJointAt(x: number, y: number) {
       if (!bodies) return null;
       const joints = getStickmanJoints(bodies) as Record<string, {x: number, y: number}>;
       const groups = [
@@ -640,7 +659,7 @@ export default function Home() {
       }
       return null;
     }
-    function getHoldAt(x, y) {
+    function getHoldAt(x: number, y: number) {
       for (let i = holds.length - 1; i >= 0; i--) {
         const hold = holds[i];
         if (Math.hypot(x - hold.x, y - hold.y) < 32) return i;
@@ -655,7 +674,7 @@ export default function Home() {
     let dragging = false;
     let dragJoint: string | null = null;
     let offset = { x: 0, y: 0 };
-    function onMouseMove(e) {
+    function onMouseMove(e: any) {
       const rect = canvas.getBoundingClientRect();
       const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
       const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
@@ -757,7 +776,7 @@ export default function Home() {
         setHoveredJoint(getJointAt(x, y));
       }
     }
-    function onMouseDown(e) {
+    function onMouseDown(e: any) {
       const rect = canvas.getBoundingClientRect();
       const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
       const y = (e.touches ? e.touches[0].clientY : e.clientY) - rect.top;
@@ -769,8 +788,16 @@ export default function Home() {
           return;
         }
       }
+      // Hold force selector mode: select a hold for analysis
+      if (isHoldForceSelectorMode && e.button === 0) {
+        const idx = getHoldAt(x, y);
+        if (idx !== null) {
+          setSelectedAnalysisHoldId(holds[idx].id);
+          return;
+        }
+      }
       // Place/move holds in place mode
-      if (mode === "place" && e.button === 0) {
+      if (mode === "place" && e.button === 0 && !isHoldForceSelectorMode) {
         const existingIdx = getHoldAt(x, y);
         if (existingIdx !== null) {
           draggedHoldIdxRef.current = existingIdx;
@@ -780,7 +807,8 @@ export default function Home() {
         if (selectedHold) {
           const gx = Math.round((x - HOLE_SPACING / 2) / HOLE_SPACING) * HOLE_SPACING + HOLE_SPACING / 2;
           const gy = Math.round((y - HOLE_SPACING / 2) / HOLE_SPACING) * HOLE_SPACING + HOLE_SPACING / 2;
-          setHolds(hs => [...hs, { x: gx, y: gy, type: selectedHold }]);
+          const holdId = `hold-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+          setHolds(hs => [...hs, { x: gx, y: gy, type: selectedHold, id: holdId, grip: "intended" }]);
         }
         return;
       }
@@ -861,7 +889,7 @@ export default function Home() {
       setDraggedJoint(null);
       draggedJointRef.current = null;
     }
-    function onContextMenu(e) {
+    function onContextMenu(e: any) {
       e.preventDefault();
     }
     canvas.addEventListener("mousemove", onMouseMove);
@@ -882,9 +910,9 @@ export default function Home() {
       canvas.removeEventListener("touchend", onMouseUp);
       canvas.removeEventListener("contextmenu", onContextMenu);
     };
-  }, [bodies, scale, selectedHold, holds, climberPlaced, mode, engine]);
+  }, [bodies, scale, selectedHold, holds, climberPlaced, mode, engine, isHoldForceSelectorMode]);
 
-  function formatHeight(inches) {
+  function formatHeight(inches: number) {
     const ft = Math.floor(inches / 12);
     const inch = inches % 12;
     return `${ft}ft ${inch}in`;
@@ -1068,9 +1096,127 @@ export default function Home() {
       {/* Right Sidebar */}
       <aside className="w-[300px] h-full bg-white border-l border-[#E5E7EB] flex flex-col px-6 py-8">
         <h2 className="font-bold text-xl mb-6">Force Analysis</h2>
-        <div className="flex-1 flex items-center justify-center">
-          <span className="text-gray-400 text-center">Position the climber and click Analyze</span>
+
+        {/* Hold Force Selector Toggle */}
+        <div className="mb-6">
+          <button
+            type="button"
+            onClick={() => {
+              setIsHoldForceSelectorMode(!isHoldForceSelectorMode);
+              if (!isHoldForceSelectorMode) {
+                setSelectedAnalysisHoldId(null);
+                setAnalysisResult(null);
+              }
+            }}
+            className={
+              isHoldForceSelectorMode
+                ? "w-full py-2 px-3 rounded font-semibold text-sm transition bg-[#FF6B35] text-white"
+                : "w-full py-2 px-3 rounded font-semibold text-sm transition bg-white text-[#171717] border border-gray-300 hover:border-[#FF6B35]"
+            }
+          >
+            🎯 Hold Force Selector
+          </button>
+          {isHoldForceSelectorMode && (
+            <p className="text-xs text-gray-500 mt-2">Click a hold on the wall to select it for analysis</p>
+          )}
         </div>
+
+        {/* Selected Hold Info & Run Analysis Button */}
+        {isHoldForceSelectorMode && selectedAnalysisHoldId && (
+          <div className="mb-6 p-3 bg-gray-50 rounded border border-gray-200">
+            <p className="text-xs font-semibold text-gray-600 mb-2">Selected Hold</p>
+            <p className="text-sm font-mono text-[#FF6B35]">{selectedAnalysisHoldId}</p>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!selectedAnalysisHoldId || !bodies) return;
+                setIsAnalyzing(true);
+                try {
+                  const joints = getStickmanJoints(bodies);
+                  const response = await fetch("/api/analyze", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      wallIncline: incline,
+                      climberHeight: height,
+                      climberWeight: weight,
+                      joints,
+                      holds,
+                      selectedAnalysisHoldId,
+                    }),
+                  });
+                  const data = await response.json();
+                  if (response.ok) {
+                    setAnalysisResult(data);
+                  } else {
+                    alert(`Error: ${data.error}`);
+                    setAnalysisResult(null);
+                  }
+                } catch (err) {
+                  alert("Failed to run analysis");
+                  setAnalysisResult(null);
+                } finally {
+                  setIsAnalyzing(false);
+                }
+              }}
+              disabled={isAnalyzing}
+              className="w-full mt-3 py-2 px-3 rounded font-semibold text-sm transition bg-[#FF6B35] text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {isAnalyzing ? "Analyzing..." : "RUN ANALYSIS"}
+            </button>
+          </div>
+        )}
+
+        {/* Analysis Results */}
+        {analysisResult && (
+          <div className="flex-1 overflow-y-auto pr-2 space-y-4">
+            <div className="p-3 bg-blue-50 rounded border border-blue-200">
+              <p className="text-xs font-semibold text-gray-600 mb-1">Total Force on Hold</p>
+              <p className="text-lg font-bold text-[#FF6B35]">
+                {(analysisResult.holdTotalLbs ?? 0).toFixed(1)} lbs
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                {(analysisResult.holdPercentageOfBodyWeight ?? 0).toFixed(1)}% of body weight
+              </p>
+            </div>
+
+            <div>
+              <p className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wider">Muscles Used</p>
+              <div className="space-y-2">
+                {analysisResult.musclesUsed?.map((muscle: any, i: number) => (
+                  <div key={i} className="p-2 bg-gray-50 rounded border border-gray-200">
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="text-xs font-semibold text-gray-700 capitalize">{muscle.name}</span>
+                      <span className="text-xs font-mono text-[#FF6B35]">{(muscle.lbs ?? 0).toFixed(1)} lbs</span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded h-1.5">
+                      <div
+                        className="bg-[#FF6B35] h-1.5 rounded transition-all"
+                        style={{ width: `${Math.min(muscle.percentage ?? 0, 100)}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1">{(muscle.percentage ?? 0).toFixed(1)}% activation</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {analysisResult.biomechanicalBreakdown && (
+              <div>
+                <p className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wider">Biomechanical Breakdown</p>
+                <p className="text-xs text-gray-700 leading-relaxed bg-gray-50 p-3 rounded border border-gray-200">
+                  {analysisResult.biomechanicalBreakdown}
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!isHoldForceSelectorMode && !analysisResult && (
+          <div className="flex-1 flex items-center justify-center">
+            <span className="text-gray-400 text-center text-sm">Enable Hold Force Selector to analyze specific holds</span>
+          </div>
+        )}
       </aside>
     </div>
   );
