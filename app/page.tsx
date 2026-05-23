@@ -644,7 +644,7 @@ export default function Home() {
       if (!bodies) return null;
       const joints = getStickmanJoints(bodies) as Record<string, {x: number, y: number}>;
       const groups = [
-        { keys: ["leftHand", "rightHand", "leftFoot", "rightFoot"], r: 12 },
+        { keys: ["leftHand", "rightHand", "leftFoot", "rightFoot"], r: 18 },
         { keys: ["pelvis"], r: 12 },
         { keys: ["leftShoulder", "leftElbow", "rightShoulder", "rightElbow", "leftHip", "leftKnee", "rightHip", "rightKnee"], r: 10 },
         { keys: ["head", "neck", "torso"], r: 15 },
