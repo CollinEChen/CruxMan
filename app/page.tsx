@@ -1114,7 +1114,7 @@ export default function Home() {
                 : "w-full py-2 px-3 rounded font-semibold text-sm transition bg-white text-[#171717] border border-gray-300 hover:border-[#FF6B35]"
             }
           >
-            🎯 Hold Force Selector
+            Hold Force Selector
           </button>
           {isHoldForceSelectorMode && (
             <p className="text-xs text-gray-500 mt-2">Click a hold on the wall to select it for analysis</p>
